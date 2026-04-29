@@ -4,10 +4,11 @@
  * @author xmikusm00
  */
 
-#include "args.hpp"
 #include <iostream>
 #include <cstdlib>
 #include <getopt.h>
+
+#include "args.hpp"
 
 void print_usage()
 {
@@ -53,10 +54,19 @@ The server MUST handle exactly one transfer per process run. The first successfu
 )" << std::endl;
 }
 
-Args parse_args(int argc, char *argv[])
+Args parse_args(const int argc, char *argv[])
 {
     Args args;
     int opt;
+
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::string(argv[i]) == "--help")
+        {
+            print_usage();
+            exit(0);
+        }
+    }
 
     while ((opt = getopt(argc, argv, "scp:a:i:o:w:h")) != -1)
     {
@@ -81,9 +91,6 @@ Args parse_args(int argc, char *argv[])
             args.mode = Mode::CLIENT;
             break;
         case 'h':
-            print_usage();
-            exit(0);
-        case '--help':
             print_usage();
             exit(0);
         case 'p':
