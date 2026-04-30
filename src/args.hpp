@@ -20,7 +20,7 @@ struct Args
     Mode mode = Mode::NONE;
     uint16_t port = 0;        // -p PORT
     std::string address_host; // -a ADDRESS (server: bind addr) / HOST (client: destination)
-    std::string input;        // -i INPUT (client only, empty = stdin)
+    std::string input = "";   // -i INPUT (client only, empty = stdin)
     std::string output;       // -o OUTPUT (server only, empty = stdout)
     int timeout = 1;          // -w TIMEOUT in seconds
 };

@@ -14,15 +14,21 @@ public:
 
 private:
     int sock = -1;
+    int timeout_sec = 1;
+    FILE *output_file = nullptr;
     sockaddr_storage client_addr{};
     uint32_t conn_id = 0;
+    uint32_t expected_seq = 0;
+    uint32_t initial_seq = 0;
+
+    WindowSlot window[WINDOW_SIZE]{};
     enum class State
     {
         WAIT_SYN,
         SEND_SYNACK,
         WAIT_ACK,
         DATA_TRANSFER,
-        SEND_FIN,
+        SEND_FIN_ACK,
         DONE
     };
 
