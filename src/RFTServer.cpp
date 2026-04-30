@@ -188,6 +188,8 @@ void RFTServer::run()
         case State::SEND_FIN_ACK:
         {
             send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_FIN | FLAG_ACK, 0, expected_seq, nullptr, 0);
+            // wait at least one timeout period to ensure client receives FIN-ACK before we potentially exit and close the socket
+
             std::cerr << "[server] FIN-ACK sent\n";
             current_state = State::DONE;
             break;

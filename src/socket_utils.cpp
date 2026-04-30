@@ -15,6 +15,7 @@ void send_pdu(int sock, sockaddr *dest, socklen_t dest_len,
        hdr.conn_id = conn_id;
        hdr.flags = flags;
        hdr.seq = seq;
+       hdr.ack = ack;
        hdr.length = static_cast<uint16_t>(payload_len);
        std::memcpy(pdu, &hdr, sizeof(hdr));
        std::memcpy(pdu + sizeof(hdr), payload, payload_len);

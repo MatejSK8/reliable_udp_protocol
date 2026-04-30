@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <netdb.h>
 #include <sys/socket.h>
 #include "args.hpp"
@@ -12,6 +13,10 @@ public:
     void run(const Args &args);
 
 private:
+    double srtt = -1;
+    double rttvar = 0;
+    double rto = 0.2;
+    std::chrono::steady_clock::time_point syn_send_time;
     PduHeader syn_pdu{};
     uint32_t base = 0;
     uint32_t next_seq = 0;

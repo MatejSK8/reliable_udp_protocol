@@ -67,6 +67,7 @@ void RFTClient::run(const Args &args)
         {
             syn_pdu.conn_id = static_cast<uint32_t>(rand());
             syn_pdu.seq = next_seq;
+            syn_send_time = clock::now();
             send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_SYN, syn_pdu.seq, 0, nullptr, 0);
             current_state = State::WAIT_SYNACK;
             break;
@@ -81,6 +82,7 @@ void RFTClient::run(const Args &args)
                 if (g_stop)
                     break;
                 std::cerr << "[client] timeout, resending SYN\n";
+                syn_send_time = clock::now();
                 sendto(sock, &syn_pdu, sizeof(syn_pdu), 0,
                        reinterpret_cast<sockaddr *>(&dest_addr), dest_len);
                 break;
@@ -88,7 +90,13 @@ void RFTClient::run(const Args &args)
             PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
             if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == (FLAG_SYN | FLAG_ACK))
             {
-                std::cerr << "[client] SYN-ACK received, sending ACK\n";
+                double rtt = std::chrono::duration<double>(clock::now() - syn_send_time).count();
+                srtt = rtt;
+                rttvar = rtt / 2.0;
+                rto = srtt + 4.0 * rttvar;
+                if (rto < 0.1) rto = 0.1;
+                if (rto > 60.0) rto = 60.0;
+                std::cerr << "[client] SYN-ACK received, RTT=" << rtt << "s RTO=" << rto << "s\n";
                 send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_ACK, 0, hdr->seq + 1, nullptr, 0);
                 last_progress = clock::now();
                 current_state = State::DATA_TRANSFER;
