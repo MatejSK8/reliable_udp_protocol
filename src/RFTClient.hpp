@@ -12,6 +12,7 @@ public:
     void run(const Args &args);
 
 private:
+    PduHeader syn_pdu{};
     uint32_t base = 0;
     uint32_t next_seq = 0;
     bool eof_reached = false;
@@ -21,7 +22,6 @@ private:
     int sock = -1;
     sockaddr_storage dest_addr{};
     socklen_t dest_len = 0;
-    PduHeader syn_pdu{};
     enum class State
     {
         SEND_SYN,

@@ -11,6 +11,7 @@
 
 #include "globals.hpp"
 #include "protocol.hpp"
+#include "socket_utils.hpp"
 
 RFTServer::RFTServer(const Args &args)
 {
@@ -112,12 +113,7 @@ void RFTServer::run()
         }
         case State::SEND_SYNACK:
         {
-            PduHeader synack{};
-            synack.conn_id = conn_id;
-            synack.flags = FLAG_SYN | FLAG_ACK;
-            synack.checksum = compute_checksum(&synack, sizeof(synack));
-            sendto(sock, &synack, sizeof(synack), 0,
-                   reinterpret_cast<sockaddr *>(&client_addr), sender_len);
+            send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_SYN | FLAG_ACK, 0, expected_seq + 1, nullptr, 0);
             std::cerr << "[server] SYN-ACK sent\n";
             current_state = State::WAIT_ACK;
             break;
@@ -180,13 +176,7 @@ void RFTServer::run()
                 {
                     std::cerr << "[server] out-of-window, expected=" << expected_seq << " got=" << pdu->seq << "\n";
                 }
-                PduHeader ack{};
-                ack.conn_id = conn_id;
-                ack.flags = FLAG_ACK;
-                ack.ack = expected_seq;
-                ack.checksum = compute_checksum(&ack, sizeof(ack));
-                sendto(sock, &ack, sizeof(ack), 0,
-                       reinterpret_cast<sockaddr *>(&client_addr), sender_len);
+                send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_ACK, 0, expected_seq, nullptr, 0);
             }
             else if (pdu->flags == FLAG_FIN)
             {
@@ -197,12 +187,7 @@ void RFTServer::run()
         }
         case State::SEND_FIN_ACK:
         {
-            PduHeader synack{};
-            synack.conn_id = conn_id;
-            synack.flags = FLAG_FIN | FLAG_ACK;
-            synack.checksum = compute_checksum(&synack, sizeof(synack));
-            sendto(sock, &synack, sizeof(synack), 0,
-                   reinterpret_cast<sockaddr *>(&client_addr), sender_len);
+            send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_FIN | FLAG_ACK, 0, expected_seq, nullptr, 0);
             std::cerr << "[server] FIN-ACK sent\n";
             current_state = State::DONE;
             break;
@@ -221,7 +206,8 @@ RFTServer::~RFTServer()
 {
     if (sock >= 0)
         close(sock);
-    if (output_file && output_file != stdout) {
+    if (output_file && output_file != stdout)
+    {
         fclose(output_file);
     }
 }

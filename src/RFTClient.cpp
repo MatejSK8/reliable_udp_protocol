@@ -11,6 +11,7 @@
 
 #include "globals.hpp"
 #include "protocol.hpp"
+#include "socket_utils.hpp"
 
 RFTClient::RFTClient(const Args &args)
 {
@@ -58,20 +59,15 @@ void RFTClient::run(const Args &args)
         if (std::chrono::duration_cast<std::chrono::seconds>(clock::now() - last_progress).count() >= args.timeout)
         {
             std::cerr << "[client] no progress for " << args.timeout << "s, terminating\n";
-            exit(1);
+            exit(1); // TODO: better way to terminate? - because now i dont close the socket or the file
         }
         switch (current_state)
         {
         case State::SEND_SYN:
         {
-            syn_pdu = PduHeader{};
             syn_pdu.conn_id = static_cast<uint32_t>(rand());
-            syn_pdu.flags = FLAG_SYN;
             syn_pdu.seq = next_seq;
-            syn_pdu.checksum = compute_checksum(&syn_pdu, sizeof(syn_pdu));
-            sendto(sock, &syn_pdu, sizeof(syn_pdu), 0,
-                   reinterpret_cast<sockaddr *>(&dest_addr), dest_len);
-            std::cerr << "[client] SYN sent\n";
+            send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_SYN, syn_pdu.seq, 0, nullptr, 0);
             current_state = State::WAIT_SYNACK;
             break;
         }
@@ -93,12 +89,7 @@ void RFTClient::run(const Args &args)
             if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == (FLAG_SYN | FLAG_ACK))
             {
                 std::cerr << "[client] SYN-ACK received, sending ACK\n";
-                PduHeader ack{};
-                ack.conn_id = syn_pdu.conn_id;
-                ack.flags = FLAG_ACK;
-                ack.checksum = compute_checksum(&ack, sizeof(ack));
-                sendto(sock, &ack, sizeof(ack), 0,
-                       reinterpret_cast<sockaddr *>(&dest_addr), dest_len);
+                send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_ACK, 0, hdr->seq + 1, nullptr, 0);
                 last_progress = clock::now();
                 current_state = State::DATA_TRANSFER;
             }
@@ -111,31 +102,29 @@ void RFTClient::run(const Args &args)
                 int free_slot = -1;
                 for (int i = 0; i < WINDOW_SIZE; i++)
                 {
-                    if (!window[i].in_use) { free_slot = i; break; }
+                    if (!window[i].in_use)
+                    {
+                        free_slot = i;
+                        break;
+                    }
                 }
-                if (free_slot == -1) break;
+                if (free_slot == -1)
+                    break;
 
                 char tmp[MAX_PAYLOAD_SIZE];
                 size_t n = fread(tmp, 1, sizeof(tmp), input_file);
-                if (n == 0) { eof_reached = true; break; }
+                if (n == 0)
+                {
+                    eof_reached = true;
+                    break;
+                }
 
                 window[free_slot].seq = next_seq;
                 window[free_slot].len = n;
                 window[free_slot].in_use = true;
                 std::memcpy(window[free_slot].data, tmp, n);
 
-                char pdu[MAX_PDU_SIZE];
-                PduHeader hdr{};
-                hdr.conn_id = syn_pdu.conn_id;
-                hdr.flags = FLAG_DATA;
-                hdr.seq = next_seq;
-                hdr.length = static_cast<uint16_t>(n);
-                std::memcpy(pdu, &hdr, sizeof(hdr));
-                std::memcpy(pdu + sizeof(hdr), tmp, n);
-                hdr.checksum = compute_checksum(pdu, sizeof(hdr) + n);
-                std::memcpy(pdu, &hdr, sizeof(hdr));
-                sendto(sock, pdu, sizeof(hdr) + n, 0,
-                       reinterpret_cast<sockaddr *>(&dest_addr), dest_len);
+                send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_DATA, window[free_slot].seq, 0, tmp, n);
                 next_seq += n;
                 std::cerr << "[client] sent seq=" << window[free_slot].seq << " len=" << n << "\n";
             }
@@ -149,7 +138,8 @@ void RFTClient::run(const Args &args)
                                  reinterpret_cast<sockaddr *>(&sender), &sender_len);
             if (n < 0)
             {
-                if (g_stop) break;
+                if (g_stop)
+                    break;
                 std::cerr << "[client] timeout, resending window\n";
                 current_state = State::RESEND_DATA;
                 break;
@@ -169,7 +159,11 @@ void RFTClient::run(const Args &args)
                 }
                 bool any_in_use = false;
                 for (int i = 0; i < WINDOW_SIZE; i++)
-                    if (window[i].in_use) { any_in_use = true; break; }
+                    if (window[i].in_use)
+                    {
+                        any_in_use = true;
+                        break;
+                    }
 
                 if (!any_in_use && eof_reached)
                     current_state = State::SEND_FIN;
@@ -183,18 +177,8 @@ void RFTClient::run(const Args &args)
             {
                 if (window[i].in_use)
                 {
-                    char pdu[MAX_PDU_SIZE];
-                    PduHeader hdr{};
-                    hdr.conn_id = syn_pdu.conn_id;
-                    hdr.flags = FLAG_DATA;
-                    hdr.seq = window[i].seq;
-                    hdr.length = static_cast<uint16_t>(window[i].len);
-                    std::memcpy(pdu, &hdr, sizeof(hdr));
-                    std::memcpy(pdu + sizeof(hdr), window[i].data, window[i].len);
-                    hdr.checksum = compute_checksum(pdu, sizeof(hdr) + window[i].len);
-                    std::memcpy(pdu, &hdr, sizeof(hdr));
-                    sendto(sock, pdu, sizeof(hdr) + window[i].len, 0,
-                           reinterpret_cast<sockaddr *>(&dest_addr), dest_len);
+                    send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_DATA, window[i].seq, 0, window[i].data, window[i].len);
+                    std::cerr << "[client] resent seq=" << window[i].seq << " len=" << window[i].len << "\n";
                 }
             }
             current_state = State::WAIT_ACK;
@@ -202,12 +186,7 @@ void RFTClient::run(const Args &args)
 
         case State::SEND_FIN:
         {
-            PduHeader fin{};
-            fin.conn_id = syn_pdu.conn_id;
-            fin.flags = FLAG_FIN;
-            fin.checksum = compute_checksum(&fin, sizeof(fin));
-            sendto(sock, &fin, sizeof(fin), 0,
-                   reinterpret_cast<sockaddr *>(&dest_addr), dest_len);
+            send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_FIN, 0, 0, nullptr, 0);
             std::cerr << "[client] FIN sent\n";
             current_state = State::WAIT_FIN_ACK;
             break;

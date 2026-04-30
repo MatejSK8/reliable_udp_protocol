@@ -15,12 +15,12 @@
 #pragma pack(push, 1)
 struct PduHeader
 {
-    uint32_t conn_id;                   // connection identifier
-    uint32_t seq;                       // sequence number (byte offset or packet number)
-    uint32_t ack;                       // cumulative ACK
+    uint32_t conn_id{};                   // connection identifier
+    uint32_t seq{};                       // sequence number (byte offset or packet number)
+    uint32_t ack{};                       // cumulative ACK
     uint16_t length = MAX_PAYLOAD_SIZE; // payload length in bytes
-    uint8_t flags;                      // SYN/ACK/FIN/DATA
-    uint8_t checksum;                   // simple XOR or sum over header+payload
+    uint8_t flags{};                      // SYN/ACK/FIN/DATA
+    uint8_t checksum{};                   // simple XOR or sum over header+payload
 };
 #pragma pack(pop)
 
