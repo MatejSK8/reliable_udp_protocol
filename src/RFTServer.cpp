@@ -170,6 +170,7 @@ void RFTServer::run()
                         std::memcpy(window[slot].data, buf + sizeof(PduHeader), pdu->length);
                         std::cerr << "[server] buffered seq=" << pdu->seq << " slot=" << slot << "\n";
                     }
+                    send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_ACK, 0, pdu->seq, nullptr, 0);
                     while (true)
                     {
                         uint32_t front = ((expected_seq - initial_seq) / MAX_PAYLOAD_SIZE) % WINDOW_SIZE;
@@ -182,11 +183,15 @@ void RFTServer::run()
                         last_progress = clock::now();
                     }
                 }
+                else if (pdu->seq < expected_seq)
+                {
+                    std::cerr << "[server] duplicate packet seq=" << pdu->seq << ", expected=" << expected_seq << ", resending ACK\n";
+                    send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_ACK, 0, pdu->seq, nullptr, 0);
+                }
                 else
                 {
                     std::cerr << "[server] out-of-window, expected=" << expected_seq << " got=" << pdu->seq << "\n";
                 }
-                send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_ACK, 0, expected_seq, nullptr, 0);
             }
             else if (pdu->flags == FLAG_FIN)
             {
