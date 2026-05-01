@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -29,8 +30,10 @@ private:
         WAIT_ACK,
         DATA_TRANSFER,
         SEND_FIN_ACK,
+        WAIT_CLOSE,
         DONE
     };
 
     State current_state = State::WAIT_SYN;
+    std::chrono::steady_clock::time_point close_deadline;
 };

@@ -18,9 +18,9 @@ void send_pdu(int sock, sockaddr *dest, socklen_t dest_len,
        hdr.ack = ack;
        hdr.length = static_cast<uint16_t>(payload_len);
        std::memcpy(pdu, &hdr, sizeof(hdr));
-       std::memcpy(pdu + sizeof(hdr), payload, payload_len);
-       hdr.checksum = compute_checksum(pdu, sizeof(hdr) + payload_len);
-       std::memcpy(pdu, &hdr, sizeof(hdr));
+       if (payload && payload_len > 0)
+           std::memcpy(pdu + sizeof(hdr), payload, payload_len);
+       reinterpret_cast<PduHeader *>(pdu)->checksum = compute_checksum(pdu, sizeof(hdr) + payload_len);
        sendto(sock, pdu, sizeof(hdr) + payload_len, 0,
               reinterpret_cast<sockaddr *>(dest), dest_len);
 }

@@ -83,8 +83,7 @@ void RFTClient::run(const Args &args)
                     break;
                 std::cerr << "[client] timeout, resending SYN\n";
                 syn_send_time = clock::now();
-                sendto(sock, &syn_pdu, sizeof(syn_pdu), 0,
-                       reinterpret_cast<sockaddr *>(&dest_addr), dest_len);
+                send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_SYN, syn_pdu.seq, 0, nullptr, 0);
                 break;
             }
             PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
@@ -94,8 +93,10 @@ void RFTClient::run(const Args &args)
                 srtt = rtt;
                 rttvar = rtt / 2.0;
                 rto = srtt + 4.0 * rttvar;
-                if (rto < 0.1) rto = 0.1;
-                if (rto > 60.0) rto = 60.0;
+                if (rto < 0.1)
+                    rto = 0.1;
+                if (rto > 60.0)
+                    rto = 60.0;
                 std::cerr << "[client] SYN-ACK received, RTT=" << rtt << "s RTO=" << rto << "s\n";
                 send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_ACK, 0, hdr->seq + 1, nullptr, 0);
                 last_progress = clock::now();
@@ -152,6 +153,7 @@ void RFTClient::run(const Args &args)
                 current_state = State::RESEND_DATA;
                 break;
             }
+
             PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
             if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == FLAG_ACK)
             {
@@ -181,17 +183,28 @@ void RFTClient::run(const Args &args)
             break;
         }
         case State::RESEND_DATA:
+        {
+            bool resended = false;
             for (int i = 0; i < WINDOW_SIZE; i++)
             {
+
                 if (window[i].in_use)
                 {
                     send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_DATA, window[i].seq, 0, window[i].data, window[i].len);
+                    resended = true;
                     std::cerr << "[client] resent seq=" << window[i].seq << " len=" << window[i].len << "\n";
                 }
             }
-            current_state = State::WAIT_ACK;
+            if (!resended && eof_reached)
+            {
+                current_state = State::SEND_FIN;
+            }
+            else
+            {
+                current_state = State::WAIT_ACK;
+            }
             break;
-
+        }
         case State::SEND_FIN:
         {
             send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_FIN, 0, 0, nullptr, 0);

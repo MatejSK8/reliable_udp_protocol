@@ -79,8 +79,7 @@ void RFTServer::run()
 
     while (!g_stop)
     {
-        if (current_state != State::DONE && current_state != State::WAIT_SYN &&
-            std::chrono::duration_cast<std::chrono::seconds>(clock::now() - last_progress).count() >= timeout_sec)
+        if (std::chrono::duration_cast<std::chrono::seconds>(clock::now() - last_progress).count() >= timeout_sec)
         {
             std::cerr << "[server] no progress for " << timeout_sec << "s, terminating\n";
             exit(1);
@@ -147,6 +146,17 @@ void RFTServer::run()
             PduHeader *pdu = reinterpret_cast<PduHeader *>(buf);
             if (pdu->conn_id != conn_id)
                 break;
+            {
+                uint8_t received_cksum = pdu->checksum;
+                pdu->checksum = 0;
+                uint8_t expected_cksum = compute_checksum(buf, sizeof(PduHeader) + pdu->length);
+                pdu->checksum = received_cksum;
+                if (received_cksum != expected_cksum)
+                {
+                    std::cerr << "[server] checksum mismatch, expected=" << static_cast<int>(expected_cksum) << " got=" << static_cast<int>(received_cksum) << "\n";
+                    break;
+                }
+            }
             if (pdu->flags == FLAG_DATA)
             {
                 uint32_t slot = ((pdu->seq - initial_seq) / MAX_PAYLOAD_SIZE) % WINDOW_SIZE;
@@ -188,10 +198,30 @@ void RFTServer::run()
         case State::SEND_FIN_ACK:
         {
             send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_FIN | FLAG_ACK, 0, expected_seq, nullptr, 0);
-            // wait at least one timeout period to ensure client receives FIN-ACK before we potentially exit and close the socket
-
             std::cerr << "[server] FIN-ACK sent\n";
-            current_state = State::DONE;
+            close_deadline = clock::now() + std::chrono::seconds(timeout_sec);
+            current_state = State::WAIT_CLOSE;
+            break;
+        }
+        case State::WAIT_CLOSE:
+        {
+            if (clock::now() >= close_deadline)
+            {
+                current_state = State::DONE;
+                break;
+            }
+            sender_len = sizeof(client_addr);
+            ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
+                                 reinterpret_cast<sockaddr *>(&client_addr), &sender_len);
+            if (n < 0)
+                break;
+            PduHeader *pdu = reinterpret_cast<PduHeader *>(buf);
+            if (pdu->conn_id == conn_id && pdu->flags == FLAG_FIN)
+            {
+                send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_FIN | FLAG_ACK, 0, expected_seq, nullptr, 0);
+                std::cerr << "[server] FIN retransmit, resent FIN-ACK\n";
+                close_deadline = clock::now() + std::chrono::seconds(timeout_sec);
+            }
             break;
         }
         case State::DONE:

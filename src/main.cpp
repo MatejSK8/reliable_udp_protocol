@@ -13,11 +13,6 @@ static void sig_handler(int) {
     g_interrupted = 1;
 }
 
-// Sleep for up to ms milliseconds, waking every 10ms to check for interrupt.
-static void interruptible_sleep(const int ms) {
-    for (int elapsed = 0; elapsed < ms && !g_interrupted; elapsed += 10)
-        usleep(10000);
-}
 
 int main(const int argc, char *argv[]) {
     signal(SIGINT, sig_handler);

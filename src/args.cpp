@@ -58,6 +58,7 @@ Args parse_args(const int argc, char *argv[])
 {
     Args args;
     int opt;
+    bool port_specified = false;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -94,14 +95,18 @@ Args parse_args(const int argc, char *argv[])
             print_usage();
             exit(0);
         case 'p':
-            args.port = static_cast<uint16_t>(std::stoi(optarg));
-            if (args.port <= 0 || args.port > 65535)
+        {
+            int port = std::stoi(optarg);
+            if (port <= 0 || port > 65535)
             {
-                std::cerr << "Invalid port number: " << args.port << std::endl;
+                std::cerr << "Invalid port number: " << port << std::endl;
                 print_usage();
                 exit(1);
             }
-            break;
+            args.port = static_cast<uint16_t>(port);
+            port_specified = true;
+        }
+        break;
         case 'a':
             // SERVER/HOST
             args.address_host = optarg;
@@ -129,6 +134,12 @@ Args parse_args(const int argc, char *argv[])
             print_usage();
             exit(1);
         }
+    }
+    if (!port_specified)
+    {
+        std::cerr << "Port number is required" << std::endl;
+        print_usage();
+        exit(1);
     }
 
     return args;
