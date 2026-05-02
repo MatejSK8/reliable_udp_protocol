@@ -5,7 +5,7 @@
 #define MAX_PDU_SIZE 1200
 #define HEADER_SIZE 16
 #define MAX_PAYLOAD_SIZE (MAX_PDU_SIZE - HEADER_SIZE)
-#define WINDOW_SIZE 8
+#define WINDOW_SIZE 64
 
 // Flags
 #define FLAG_SYN 0x01
