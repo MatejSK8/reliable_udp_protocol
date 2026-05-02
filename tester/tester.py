@@ -26,7 +26,7 @@ def clear_netem():
 
 
 def run_test(label):
-    print(f"\n--- {label} ---")
+    print(f"\n--- {label} ---", file=sys.stderr)
 
     if os.path.exists(OUTPUT):
         os.remove(OUTPUT)
@@ -60,10 +60,10 @@ def run_test(label):
 
 if __name__ == "__main__":
     if not os.path.exists(BINARY):
-        print("Build the project first: make")
+        print("Build the project first: make", file=sys.stderr)
         sys.exit(1)
     if not os.path.exists(INPUT):
-        print("Create input_file first: dd if=/dev/urandom of=input_file bs=1M count=10")
+        print("Create input_file first: dd if=/dev/urandom of=input_file bs=1M count=10", file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -80,6 +80,6 @@ if __name__ == "__main__":
         run_test("Test 3: 5% loss + 30ms delay + 20% reorder")
     finally:
         clear_netem()
-        print("\nnetem cleared.")
+        print("\nnetem cleared.", file=sys.stderr)
 
-    print("Done.")
+    print("Done.", file=sys.stderr)

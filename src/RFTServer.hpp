@@ -20,9 +20,12 @@ private:
     sockaddr_storage client_addr{};
     uint32_t conn_id = 0;
     uint32_t expected_seq = 0;
-    uint32_t initial_seq = 0;
 
-    WindowSlot window[WINDOW_SIZE]{};
+    double srtt = -1;
+    double rttvar = 0;
+    double rto = 1.0;
+    std::chrono::steady_clock::time_point synack_send_time;
+
     enum class State
     {
         WAIT_SYN,
@@ -36,4 +39,7 @@ private:
 
     State current_state = State::WAIT_SYN;
     std::chrono::steady_clock::time_point close_deadline;
+
+    void set_recv_timeout(double seconds);
+    void update_rtt(double sample);
 };

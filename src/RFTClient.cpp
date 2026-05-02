@@ -1,6 +1,7 @@
 #include "RFTClient.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,17 +14,51 @@
 #include "protocol.hpp"
 #include "socket_utils.hpp"
 
+void RFTClient::set_recv_timeout(double seconds)
+{
+    if (seconds < 0.001)
+        seconds = 0.001;
+    struct timeval tv{};
+    tv.tv_sec = static_cast<time_t>(seconds);
+    tv.tv_usec = static_cast<suseconds_t>((seconds - tv.tv_sec) * 1e6);
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+
+void RFTClient::update_rtt(double sample)
+{
+    if (srtt < 0)
+    {
+        srtt = sample;
+        rttvar = sample / 2.0;
+    }
+    else
+    {
+        rttvar = 0.75 * rttvar + 0.25 * std::fabs(srtt - sample);
+        srtt = 0.875 * srtt + 0.125 * sample;
+    }
+    rto = srtt + 4.0 * rttvar;
+    if (rto < 0.1)
+        rto = 0.1;
+    if (rto > 60.0)
+        rto = 60.0;
+}
+
 RFTClient::RFTClient(const Args &args)
 {
     input_file = args.input.empty() || args.input == "-" ? stdin : fopen(args.input.c_str(), "rb");
 
-    base = next_seq = static_cast<uint32_t>(rand());
+    next_seq = static_cast<uint32_t>(rand());
 
-    memset(window, 0, sizeof(window));
+    for (int i = 0; i < WINDOW_SIZE; i++)
+    {
+        window[i].in_use = false;
+        window[i].acked = false;
+    }
 
     struct addrinfo hints{}, *res;
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = AI_NUMERICSERV;
 
     std::string port_str = std::to_string(args.port);
     getaddrinfo(args.address_host.c_str(), port_str.c_str(), &hints, &res);
@@ -35,10 +70,7 @@ RFTClient::RFTClient(const Args &args)
         {
             std::memcpy(&dest_addr, p->ai_addr, p->ai_addrlen);
             dest_len = p->ai_addrlen;
-            struct timeval tv{};
-            tv.tv_sec = 0;
-            tv.tv_usec = 200000;
-            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            set_recv_timeout(rto);
             break;
         }
     }
@@ -59,7 +91,7 @@ void RFTClient::run(const Args &args)
         if (std::chrono::duration_cast<std::chrono::seconds>(clock::now() - last_progress).count() >= args.timeout)
         {
             std::cerr << "[client] no progress for " << args.timeout << "s, terminating\n";
-            exit(1); // TODO: better way to terminate? - because now i dont close the socket or the file
+            exit(1);
         }
         switch (current_state)
         {
@@ -86,122 +118,134 @@ void RFTClient::run(const Args &args)
                 send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_SYN, syn_pdu.seq, 0, nullptr, 0);
                 break;
             }
-            PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
-            if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == (FLAG_SYN | FLAG_ACK))
             {
-                double rtt = std::chrono::duration<double>(clock::now() - syn_send_time).count();
-                srtt = rtt;
-                rttvar = rtt / 2.0;
-                rto = srtt + 4.0 * rttvar;
-                if (rto < 0.1)
-                    rto = 0.1;
-                if (rto > 60.0)
-                    rto = 60.0;
-                std::cerr << "[client] SYN-ACK received, RTT=" << rtt << "s RTO=" << rto << "s\n";
-                send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_ACK, 0, hdr->seq + 1, nullptr, 0);
-                last_progress = clock::now();
-                current_state = State::DATA_TRANSFER;
+                PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
+                uint8_t rc = hdr->checksum;
+                hdr->checksum = 0;
+                bool ok = (compute_checksum(buf, n) == rc);
+                hdr->checksum = rc;
+                if (!ok)
+                    break;
+                if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == (FLAG_SYN | FLAG_ACK))
+                {
+                    double rtt = std::chrono::duration<double>(clock::now() - syn_send_time).count();
+                    update_rtt(rtt);
+                    set_recv_timeout(rto);
+                    std::cerr << "[client] SYN-ACK received, RTT=" << rtt << "s RTO=" << rto << "s\n";
+                    send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_ACK, 0, hdr->seq + 1, nullptr, 0);
+                    last_progress = clock::now();
+                    current_state = State::DATA_TRANSFER;
+                }
             }
             break;
         }
         case State::DATA_TRANSFER:
         {
-            while (!eof_reached)
+            auto now = clock::now();
+            auto rto_dur = std::chrono::duration<double>(rto);
+
+            if (window[window_start].in_use && (now - window[window_start].send_time) >= rto_dur)
             {
-                int free_slot = -1;
                 for (int i = 0; i < WINDOW_SIZE; i++)
                 {
-                    if (!window[i].in_use)
-                    {
-                        free_slot = i;
+                    int idx = (window_start + i) % WINDOW_SIZE;
+                    if (!window[idx].in_use)
                         break;
-                    }
+                    send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len,
+                             syn_pdu.conn_id, FLAG_DATA, window[idx].seq, 0,
+                             window[idx].data, window[idx].len);
+                    window[idx].send_time = now;
+                    window[idx].retransmitted = true;
+                    std::cerr << "[client] retransmit seq=" << window[idx].seq << "\n";
                 }
-                if (free_slot == -1)
-                    break;
+            }
 
-                char tmp[MAX_PAYLOAD_SIZE];
-                size_t n = fread(tmp, 1, sizeof(tmp), input_file);
-                if (n == 0)
+            while (!eof_reached)
+            {
+                int count = 0;
+                for (int i = 0; i < WINDOW_SIZE; i++)
+                    if (window[i].in_use)
+                        count++;
+                if (count >= WINDOW_SIZE)
+                    break;
+                int free_slot = (window_start + count) % WINDOW_SIZE;
+
+                size_t bytes = fread(window[free_slot].data, 1, MAX_PAYLOAD_SIZE, input_file);
+                if (bytes == 0)
                 {
                     eof_reached = true;
                     break;
                 }
 
                 window[free_slot].seq = next_seq;
-                window[free_slot].len = n;
+                window[free_slot].len = bytes;
                 window[free_slot].in_use = true;
-                std::memcpy(window[free_slot].data, tmp, n);
+                window[free_slot].acked = false;
+                window[free_slot].retransmitted = false;
+                window[free_slot].send_time = clock::now();
 
-                send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_DATA, window[free_slot].seq, 0, tmp, n);
-                next_seq += n;
-                std::cerr << "[client] sent seq=" << window[free_slot].seq << " len=" << n << "\n";
+                send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len,
+                         syn_pdu.conn_id, FLAG_DATA, window[free_slot].seq, 0,
+                         window[free_slot].data, bytes);
+                next_seq += bytes;
+                std::cerr << "[client] sent seq=" << window[free_slot].seq << " len=" << bytes << "\n";
             }
-            current_state = State::WAIT_ACK;
-            break;
-        }
-        case State::WAIT_ACK:
-        {
+
+            bool any_in_use = false;
+            for (int i = 0; i < WINDOW_SIZE; i++)
+                if (window[i].in_use)
+                {
+                    any_in_use = true;
+                    break;
+                }
+
+            if (eof_reached && !any_in_use)
+            {
+                current_state = State::SEND_FIN;
+                break;
+            }
+
+            if (any_in_use)
+            {
+                double elapsed = std::chrono::duration<double>(clock::now() - window[window_start].send_time).count();
+                double remaining = rto - elapsed;
+                set_recv_timeout(remaining > 0.001 ? remaining : 0.001);
+            }
+
             sender_len = sizeof(sender);
             ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
                                  reinterpret_cast<sockaddr *>(&sender), &sender_len);
             if (n < 0)
+                break; // timeout — loop back, step 1 will retransmit
+
             {
-                if (g_stop)
+                PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
+                uint8_t rc = hdr->checksum;
+                hdr->checksum = 0;
+                bool ck_ok = (compute_checksum(buf, sizeof(PduHeader) + hdr->length) == rc);
+                hdr->checksum = rc;
+                if (!ck_ok)
                     break;
-                std::cerr << "[client] timeout, resending window\n";
-                current_state = State::RESEND_DATA;
-                break;
-            }
+                if (hdr->conn_id != syn_pdu.conn_id || hdr->flags != FLAG_ACK)
+                    break;
 
-            PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
-            if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == FLAG_ACK)
-            {
-                std::cerr << "[client] ACK received, ack=" << hdr->ack << "\n";
-                uint32_t acked_seq = hdr->ack;
-                if (acked_seq != base)
-                    last_progress = clock::now();
-                base = acked_seq;
-                for (int i = 0; i < WINDOW_SIZE; i++)
+                uint32_t cum_ack = hdr->ack;
+                std::cerr << "[client] ACK cum=" << cum_ack << "\n";
+                while (window[window_start].in_use &&
+                       (window[window_start].seq + static_cast<uint32_t>(window[window_start].len)) <= cum_ack)
                 {
-                    if (window[i].in_use && window[i].seq + window[i].len <= acked_seq)
-                        window[i].in_use = false;
-                }
-                bool any_in_use = false;
-                for (int i = 0; i < WINDOW_SIZE; i++)
-                    if (window[i].in_use)
+                    if (!window[window_start].retransmitted)
                     {
-                        any_in_use = true;
-                        break;
+                        double rtt = std::chrono::duration<double>(clock::now() - window[window_start].send_time).count();
+                        update_rtt(rtt);
                     }
+                    window[window_start].in_use = false;
+                    window_start = (window_start + 1) % WINDOW_SIZE;
+                    last_progress = clock::now();
 
-                if (!any_in_use && eof_reached)
-                    current_state = State::SEND_FIN;
-                else if (!any_in_use)
-                    current_state = State::DATA_TRANSFER;
-            }
-            break;
-        }
-        case State::RESEND_DATA:
-        {
-            bool resended = false;
-            for (int i = 0; i < WINDOW_SIZE; i++)
-            {
-
-                if (window[i].in_use)
-                {
-                    send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_DATA, window[i].seq, 0, window[i].data, window[i].len);
-                    resended = true;
-                    std::cerr << "[client] resent seq=" << window[i].seq << " len=" << window[i].len << "\n";
+                    if (rto > 2.0)
+                        rto = 2.0;
                 }
-            }
-            if (!resended && eof_reached)
-            {
-                current_state = State::SEND_FIN;
-            }
-            else
-            {
-                current_state = State::WAIT_ACK;
             }
             break;
         }
@@ -209,6 +253,7 @@ void RFTClient::run(const Args &args)
         {
             send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_FIN, 0, 0, nullptr, 0);
             std::cerr << "[client] FIN sent\n";
+            set_recv_timeout(rto);
             current_state = State::WAIT_FIN_ACK;
             break;
         }
@@ -225,12 +270,20 @@ void RFTClient::run(const Args &args)
                 current_state = State::SEND_FIN;
                 break;
             }
-            PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
-            if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == (FLAG_FIN | FLAG_ACK))
             {
-                std::cerr << "[client] FIN-ACK received\n";
-                last_progress = clock::now();
-                current_state = State::DONE;
+                PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
+                uint8_t rc = hdr->checksum;
+                hdr->checksum = 0;
+                bool ck_ok = (compute_checksum(buf, n) == rc);
+                hdr->checksum = rc;
+                if (!ck_ok)
+                    break;
+                if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == (FLAG_FIN | FLAG_ACK))
+                {
+                    std::cerr << "[client] FIN-ACK received\n";
+                    last_progress = clock::now();
+                    current_state = State::DONE;
+                }
             }
             break;
         }
