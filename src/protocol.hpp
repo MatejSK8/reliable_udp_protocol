@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
 
 #define MAX_PDU_SIZE 1200
@@ -30,6 +31,9 @@ struct WindowSlot
     size_t len;
     uint32_t seq;
     bool in_use;
+    bool acked;
+    bool retransmitted;
+    std::chrono::steady_clock::time_point send_time;
 };
 
 inline uint8_t compute_checksum(const void *data, size_t len)
