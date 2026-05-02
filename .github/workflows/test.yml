@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ipk-rdt
+        run: make
+
+      - name: Build test harness
+        run: make -C IPK_tests-master/2
+
+      - name: Run tests
+        run: ./test_ipk_rdt -b ../../ipk-rdt 
+        working-directory: IPK_tests-master/2
