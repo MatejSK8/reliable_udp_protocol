@@ -16,6 +16,8 @@ private:
     double srtt = -1;
     double rttvar = 0;
     double rto = 0.2;
+    uint32_t highest_cumulative_ack = 0;
+    int dup_ack_count = 0;
     std::chrono::steady_clock::time_point syn_send_time;
     PduHeader syn_pdu{};
     uint32_t next_seq = 0;
