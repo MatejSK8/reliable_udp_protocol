@@ -3,7 +3,7 @@ CXXFLAGS = -std=c++11 -Wall -Wextra
 
 all: ipk-rdt
 
-ipk-rdt: src/main.o src/args.o src/RDTClient.o src/RDTServer.o src/socket_utils.o
+ipk-rdt: src/main.o src/args.o src/RDTClient.o src/RDTServer.o src/socket_utils.o src/RDTBase.o
 	$(CXX) -o $@ $^
 
 src/%.o: src/%.cpp

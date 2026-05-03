@@ -1,3 +1,9 @@
+/**
+ * @file RDTClient.cpp
+ * @brief RDTClient implementation — handshake, data send loop, retransmit, teardown
+ * @author xmikusm00
+ */
+
 #include "RDTClient.hpp"
 
 #include <chrono>
@@ -13,35 +19,6 @@
 #include "globals.hpp"
 #include "protocol.hpp"
 #include "socket_utils.hpp"
-
-void RDTClient::set_recv_timeout(double seconds)
-{
-    if (seconds < 0.001)
-        seconds = 0.001;
-    struct timeval tv{};
-    tv.tv_sec = static_cast<time_t>(seconds);
-    tv.tv_usec = static_cast<suseconds_t>((seconds - tv.tv_sec) * 1e6);
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-}
-
-void RDTClient::update_rtt(double sample)
-{
-    if (srtt < 0)
-    {
-        srtt = sample;
-        rttvar = sample / 2.0;
-    }
-    else
-    {
-        rttvar = 0.75 * rttvar + 0.25 * std::fabs(srtt - sample);
-        srtt = 0.875 * srtt + 0.125 * sample;
-    }
-    rto = srtt + 4.0 * rttvar;
-    if (rto < 0.01)
-        rto = 0.01;
-    if (rto > 60.0)
-        rto = 60.0;
-}
 
 RDTClient::RDTClient(const Args &args)
 {
@@ -95,6 +72,7 @@ void RDTClient::run(const Args &args)
         }
         switch (current_state)
         {
+        // --- Session establishment — implemented per RFC 9293 §3.4 (3-way handshake) ---
         case State::SEND_SYN:
         {
             syn_pdu.conn_id = static_cast<uint32_t>(rand());
@@ -135,6 +113,8 @@ void RDTClient::run(const Args &args)
             }
             break;
         }
+        // --- Data transfer — sliding window (RFC 9293 §3.7), Go-Back-N retransmit (Kurose & Ross ch.3),
+        //     fast retransmit on 3 duplicate ACKs (RFC 5681 §3.2), cumulative ACKs (RFC 9293 §3.3) ---
         case State::DATA_TRANSFER:
         {
             auto now = clock::now();
@@ -262,6 +242,7 @@ void RDTClient::run(const Args &args)
             break;
         }
 
+        // --- Session teardown — implemented per RFC 9293 §3.6 (4-way FIN exchange, active closer) ---
         case State::SEND_FIN:
         {
             last_progress = clock::now();
@@ -333,6 +314,7 @@ void RDTClient::run(const Args &args)
             }
             break;
         }
+        // TIME_WAIT — implemented per RFC 9293 §3.6.1 (linger 2×RTO to absorb delayed FIN retransmissions)
         case State::TIME_WAIT:
         {
             if (std::chrono::duration_cast<std::chrono::duration<double>>(clock::now() - last_progress).count() >= 2 * rto)

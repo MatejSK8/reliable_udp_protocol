@@ -1,3 +1,9 @@
+/**
+ * @file RDTServer.cpp
+ * @brief RDTServer implementation — handshake, data receive loop, reordering, teardown
+ * @author xmikusm00
+ */
+
 #include "RDTServer.hpp"
 
 #include <chrono>
@@ -65,35 +71,6 @@ RDTServer::RDTServer(const Args &args)
     freeaddrinfo(res);
 }
 
-void RDTServer::set_recv_timeout(double seconds)
-{
-    if (seconds < 0.001)
-        seconds = 0.001;
-    struct timeval tv{};
-    tv.tv_sec = static_cast<time_t>(seconds);
-    tv.tv_usec = static_cast<suseconds_t>((seconds - tv.tv_sec) * 1e6);
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-}
-
-void RDTServer::update_rtt(double sample)
-{
-    if (srtt < 0)
-    {
-        srtt = sample;
-        rttvar = sample / 2.0;
-    }
-    else
-    {
-        rttvar = 0.75 * rttvar + 0.25 * std::fabs(srtt - sample);
-        srtt = 0.875 * srtt + 0.125 * sample;
-    }
-    rto = srtt + 4.0 * rttvar;
-    if (rto < 0.01)
-        rto = 0.01;
-    if (rto > 60.0)
-        rto = 60.0;
-}
-
 void RDTServer::run()
 {
     std::cerr << "RFTServer running\n";
@@ -124,6 +101,7 @@ void RDTServer::run()
 
         switch (current_state)
         {
+        // --- Session establishment — implemented per RFC 9293 §3.4 (3-way handshake, passive open) ---
         case State::WAIT_SYN:
         {
             sender_len = sizeof(client_addr);
@@ -196,6 +174,7 @@ void RDTServer::run()
             }
             break;
         }
+        // --- Data transfer — cumulative ACKs (RFC 9293 §3.3), out-of-order receive buffer (RFC 9293 §3.4) ---
         case State::DATA_TRANSFER:
         {
             sender_len = sizeof(client_addr);
@@ -258,6 +237,7 @@ void RDTServer::run()
             break;
         }
 
+        // --- Session teardown — implemented per RFC 9293 §3.6 (passive closer, LAST_ACK) ---
         case State::LAST_ACK:
         {
             sender_len = sizeof(client_addr);
