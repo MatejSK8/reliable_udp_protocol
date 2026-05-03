@@ -36,7 +36,6 @@ private:
         SEND_SYNACK,
         WAIT_ACK,
         DATA_TRANSFER,
-        SEND_FIN_ACK,
         WAIT_CLOSE,
         LAST_ACK,
         DONE

@@ -236,14 +236,6 @@ void RFTClient::run(const Args &args)
                         window[window_start].send_time = clock::now();
                         window[window_start].retransmitted = true;
                         dup_ack_count = 0;
-                        char drain[MAX_PDU_SIZE];
-                        sockaddr_storage tmp{};
-                        socklen_t tmp_len = sizeof(tmp);
-                        while (recvfrom(sock, drain, sizeof(drain), MSG_DONTWAIT,
-                                        reinterpret_cast<sockaddr *>(&tmp), &tmp_len) > 0)
-                        {
-                        }
-                        break;
                     }
                 }
                 else if (cum_ack > highest_cumulative_ack || highest_cumulative_ack == 0)
@@ -273,7 +265,7 @@ void RFTClient::run(const Args &args)
         case State::SEND_FIN:
         {
             last_progress = clock::now();
-            send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_FIN, 0, 0, nullptr, 0);
+            send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_FIN, next_seq, 0, nullptr, 0);
             std::cerr << "[client][SEND_FIN] FIN sent\n";
             set_recv_timeout(rto);
             current_state = State::FIN_WAIT_1;
@@ -298,9 +290,12 @@ void RFTClient::run(const Args &args)
                 PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
                 if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == FLAG_ACK)
                 {
-                    std::cerr << "[client][FIN_WAIT1] FIN-ACK received\n";
-                    last_progress = clock::now();
-                    current_state = State::FIN_WAIT_2;
+                    if (hdr->ack == next_seq + 1)
+                    {
+                        std::cerr << "[client][FIN_WAIT1] FIN-ACK received\n";
+                        last_progress = clock::now();
+                        current_state = State::FIN_WAIT_2;
+                    }
                 }
                 else if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == FLAG_FIN)
                 {
