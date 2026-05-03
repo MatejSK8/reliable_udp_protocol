@@ -264,13 +264,14 @@ void RFTClient::run(const Args &args)
 
         case State::SEND_FIN:
         {
+            last_progress = clock::now();
             send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_FIN, 0, 0, nullptr, 0);
-            std::cerr << "[client] FIN sent\n";
+            std::cerr << "[client][SEND_FIN] FIN sent\n";
             set_recv_timeout(rto);
-            current_state = State::WAIT_FIN_ACK;
+            current_state = State::FIN_WAIT_1;
             break;
         }
-        case State::WAIT_FIN_ACK:
+        case State::FIN_WAIT_1:
         {
             sender_len = sizeof(sender);
             ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
@@ -279,7 +280,7 @@ void RFTClient::run(const Args &args)
             {
                 if (g_stop)
                     break;
-                std::cerr << "[client] timeout, resending FIN\n";
+                std::cerr << "[client][FIN_WAIT1] timeout, resending FIN\n";
                 current_state = State::SEND_FIN;
                 break;
             }
@@ -287,11 +288,71 @@ void RFTClient::run(const Args &args)
                 if (!validate_pdu(buf, n))
                     break;
                 PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
-                if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == (FLAG_FIN | FLAG_ACK))
+                if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == FLAG_ACK)
                 {
-                    std::cerr << "[client] FIN-ACK received\n";
+                    std::cerr << "[client][FIN_WAIT1] FIN-ACK received\n";
                     last_progress = clock::now();
-                    current_state = State::DONE;
+                    current_state = State::FIN_WAIT_2;
+                }
+                else if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == FLAG_FIN)
+                {
+                    std::cerr << "[client][FIN_WAIT1] FIN received (simultaneous close), sending ACK\n";
+                    send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_ACK, 0, hdr->seq + 1, nullptr, 0);
+                    last_progress = clock::now();
+                    current_state = State::TIME_WAIT;
+                }
+            }
+            break;
+        }
+        case State::FIN_WAIT_2:
+        {
+            sender_len = sizeof(sender);
+            ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
+                                 reinterpret_cast<sockaddr *>(&sender), &sender_len);
+            if (n < 0)
+            {
+                if (g_stop)
+                    break;
+
+                break;
+            }
+            {
+                if (!validate_pdu(buf, n))
+                    break;
+                PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
+                if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == (FLAG_FIN))
+                {
+                    std::cerr << "[client][FIN_WAIT2] FIN received\n";
+                    last_progress = clock::now();
+                    send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_ACK, 0, 0, nullptr, 0);
+                    current_state = State::TIME_WAIT;
+                }
+            }
+            break;
+        }
+        case State::TIME_WAIT:
+        {
+            if (std::chrono::duration_cast<std::chrono::duration<double>>(clock::now() - last_progress).count() >= 2 * rto)
+            {
+                std::cerr << "[client][TIME_WAIT] TIME_WAIT expired, closing connection\n";
+                current_state = State::DONE;
+                break;
+            }
+            sender_len = sizeof(sender);
+            ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
+                                 reinterpret_cast<sockaddr *>(&sender), &sender_len);
+            if (n < 0)
+                break;
+            if (!validate_pdu(buf, n))
+                break;
+            {
+                PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
+                if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == FLAG_FIN)
+                {
+                    std::cerr << "[client][TIME_WAIT] FIN retransmission in TIME_WAIT, resending ACK\n";
+                    send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len,
+                             syn_pdu.conn_id, FLAG_ACK, 0, hdr->seq + 1, nullptr, 0);
+                    last_progress = clock::now();
                 }
             }
             break;
