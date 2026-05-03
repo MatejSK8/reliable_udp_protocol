@@ -8,7 +8,7 @@
 
 ## Overview
 
-`ipk-rdt` is a UDP-based reliable file transfer tool implementing a custom transport protocol with a 3-way handshake, sliding window (Go-Back-N), cumulative ACKs, and adaptive retransmission timing based on RFC 6298.
+`ipk-rdt` is a UDP-based reliable file transfer tool implementing a custom transport protocol with a 3-way handshake, sliding window (Go-Back-N with server-side receive buffer), cumulative ACKs, fast retransmit, and adaptive retransmission timing based on RFC 6298.
 
 ---
 
@@ -150,12 +150,12 @@ The sender maintains a circular array of `WindowSlot` entries. New data is loade
 Retransmission timing follows **RFC 6298**:
 
 - `SRTT` and `RTTVAR` are updated on every non-retransmitted ACK using EWMA (α = 1/8, β = 1/4).
-- `RTO = SRTT + 4 × RTTVAR`, clamped to [0.1 s, 60 s].
-- Initial RTO is 0.2 s before the first RTT sample.
+- `RTO = SRTT + 4 × RTTVAR`, clamped to [0.01 s, 60 s].
+- Initial RTO is 0.01 s before the first RTT sample.
 
 **Timeout retransmission:** if the oldest unacknowledged segment has been in the window longer than `RTO`, the entire window is retransmitted (Go-Back-N).
 
-**Fast retransmit:** three consecutive duplicate ACKs trigger an immediate retransmit of the entire window without waiting for the timer.
+**Fast retransmit (RFC 5681):** three consecutive duplicate ACKs trigger an immediate retransmit of only the oldest unacknowledged segment (`SND.UNA`) without waiting for the timer. The RTO is not modified on fast retransmit.
 
 ---
 
@@ -174,9 +174,9 @@ If no progress is observed for `TIMEOUT` seconds, the application terminates wit
 
 ## Duplicate and Out-of-Order Packet Handling
 
-- **Duplicates:** the server compares incoming `seq` to `expected_seq`. Packets with `seq ≠ expected_seq` are silently dropped; a cumulative ACK for the already-received data is still sent, allowing the sender to detect the gap.
-- **Out-of-order:** the server has no receive buffer; out-of-order segments are dropped and the client's Go-Back-N retransmit mechanism re-delivers them in order.
-- **Corrupt PDUs:** checksum mismatch causes silent discard on both client and server.
+- **Duplicates:** packets with `seq < expected_seq` are silently discarded; a cumulative ACK for `expected_seq` is still sent.
+- **Out-of-order:** the server maintains a `std::map<uint32_t, std::vector<char>>` receive buffer (TCP without SACK approach). Segments with `seq > expected_seq` and within one window range are stored. When the missing segment arrives and fills the gap, all contiguous buffered segments are flushed to output in one pass and a single cumulative ACK covering the whole block is sent.
+- **Corrupt PDUs:** all received PDUs pass through `validate_pdu()` which checks minimum size, payload length bounds, and XOR checksum. Any failure causes silent discard.
 
 ---
 
@@ -267,8 +267,9 @@ sudo tc qdisc del dev lo root
 
 ## Known Limitations
 
-- **No receive buffer on the server:** out-of-order segments are discarded. Under high reorder rates the client's Go-Back-N retransmits, but efficiency degrades compared to Selective Repeat.
 - **Fixed window size:** the window is always 64 segments regardless of network conditions; no congestion control is implemented.
+- **XOR checksum:** weaker than CRC-32 or ones-complement sum — cannot detect all even-count bit flip patterns or byte swaps.
+- **Sequence number wrap-around:** 32-bit byte-offset sequence numbers wrap at ~4 GB; transfers larger than 4 GB are not supported.
 - **Single transfer per server invocation:** the server exits after one complete transfer or failure.
 - **IPv6 dual-stack:** the implementation iterates `getaddrinfo` results and uses the first address family that succeeds; explicit dual-stack is not configured.
 - **No transfer resume:** a process crash requires restarting both sides.

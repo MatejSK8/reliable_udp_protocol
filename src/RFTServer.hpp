@@ -1,6 +1,8 @@
 #pragma once
 #include <chrono>
 #include <cstdint>
+#include <map>
+#include <vector>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include "args.hpp"
@@ -14,6 +16,7 @@ public:
     void run();
 
 private:
+    std::map<uint32_t, std::vector<char>> window_buffer;
     int sock = -1;
     int timeout_sec = 1;
     FILE *output_file = nullptr;
