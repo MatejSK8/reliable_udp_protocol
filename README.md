@@ -94,15 +94,16 @@ The client picks a random 32-bit `conn_id` at connection setup. Every subsequent
 
 Three-way handshake:
 
-```
-Client                            Server
-  |                                  |
-  |-- SYN (seq=ISN_C, conn_id=R) --> |   ISN_C = random initial seq number
-  |                                  |   R = random conn_id
-  | <-- SYN|ACK (ack=ISN_C+1) --    |
-  |                                  |
-  |-- ACK (ack=ISN_C+1) -----------> |   handshake complete
-  |                                  |
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+
+    C->>S: SYN (seq=ISN_C, conn_id=R)
+    note right of S: ISN_C = random ISN<br/>R = random conn_id
+    S->>C: SYN|ACK (ack=ISN_C+1)
+    C->>S: ACK (ack=ISN_C+1)
+    note over C,S: handshake complete
 ```
 
 The client picks a random Initial Sequence Number (ISN). RTT is measured from SYN send to SYN-ACK receipt and used to seed the retransmission timer.
@@ -111,17 +112,24 @@ The client picks a random Initial Sequence Number (ISN). RTT is measured from SY
 
 ## Session Termination
 
-```
-Client                            Server
-  |                                  |
-  |-- FIN --------------------------> |
-  |                                  |
-  | <-- FIN|ACK --------------------- |
-  |                                  |   Server waits up to 4×RTO for
-  |                                  |   FIN retransmissions (TIME_WAIT)
+Four-way teardown (TCP-style):
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+
+    C->>S: FIN
+    note left of C: FIN_WAIT_1
+    S->>C: ACK
+    S->>C: FIN
+    note right of S: LAST_ACK
+    C->>S: ACK
+    note left of C: TIME_WAIT (2×RTO)
+    note right of S: DONE
 ```
 
-If the client does not receive FIN|ACK, it retransmits FIN. If the server receives a retransmitted FIN during its wait window, it resends FIN|ACK. After the wait expires the server moves to DONE.
+The server sends ACK and FIN as separate PDUs. If the client does not receive the server's ACK/FIN, it retransmits FIN from `FIN_WAIT_1`. The client stays in `TIME_WAIT` for 2×RTO to absorb any FIN retransmissions from the server, responding with ACK each time. After the `TIME_WAIT` deadline the client moves to `DONE`.
 
 ---
 
@@ -202,8 +210,10 @@ sequenceDiagram
 
     note over C,S: Session teardown
     C->>S: FIN
-    S->>C: FIN|ACK
-    note over S: TIME_WAIT (4×RTO)
+    S->>C: ACK
+    S->>C: FIN
+    C->>S: ACK
+    note over C: TIME_WAIT (2×RTO)
 ```
 
 ### Client State Machine
@@ -216,9 +226,13 @@ stateDiagram-v2
     WAIT_SYNACK --> DATA_TRANSFER : SYN|ACK rx, send ACK
     DATA_TRANSFER --> DATA_TRANSFER : send data / receive ACK
     DATA_TRANSFER --> SEND_FIN : EOF + all ACKed
-    SEND_FIN --> WAIT_FIN_ACK : FIN sent
-    WAIT_FIN_ACK --> SEND_FIN : timeout / retransmit FIN
-    WAIT_FIN_ACK --> DONE : FIN|ACK rx
+    SEND_FIN --> FIN_WAIT_1 : FIN sent
+    FIN_WAIT_1 --> SEND_FIN : timeout / retransmit FIN
+    FIN_WAIT_1 --> FIN_WAIT_2 : ACK rx
+    FIN_WAIT_1 --> TIME_WAIT : FIN rx (simultaneous close), send ACK
+    FIN_WAIT_2 --> TIME_WAIT : FIN rx, send ACK
+    TIME_WAIT --> TIME_WAIT : FIN rx (retransmit), resend ACK
+    TIME_WAIT --> DONE : 2×RTO elapsed
     DONE --> [*]
 ```
 
@@ -232,12 +246,13 @@ stateDiagram-v2
     WAIT_ACK --> SEND_SYNACK : timeout / retransmit SYN|ACK
     WAIT_ACK --> SEND_SYNACK : SYN rx (client retransmit)
     WAIT_ACK --> DATA_TRANSFER : ACK or DATA rx
-    WAIT_ACK --> SEND_FIN_ACK : FIN rx (client gave up early)
+    WAIT_ACK --> LAST_ACK : FIN rx (client gave up early), send ACK+FIN
     DATA_TRANSFER --> DATA_TRANSFER : DATA rx / send ACK
-    DATA_TRANSFER --> SEND_FIN_ACK : FIN rx
-    SEND_FIN_ACK --> WAIT_CLOSE : FIN|ACK sent
-    WAIT_CLOSE --> SEND_FIN_ACK : FIN rx (retransmit)
-    WAIT_CLOSE --> DONE : deadline elapsed
+    DATA_TRANSFER --> LAST_ACK : FIN rx, send ACK+FIN
+    LAST_ACK --> LAST_ACK : timeout / retransmit FIN
+    LAST_ACK --> LAST_ACK : FIN rx (retransmit), resend ACK+FIN
+    LAST_ACK --> DONE : ACK rx
+    LAST_ACK --> DONE : -w timeout elapsed
     DONE --> [*]
 ```
 
@@ -276,10 +291,26 @@ sudo tc qdisc del dev lo root
 
 ---
 
+## Standards and Inspirations
+
+| Feature | Inspired by |
+|---------|-------------|
+| Transport layer (UDP) | **RFC 768** — User Datagram Protocol |
+| 3-way handshake, 4-way teardown | **RFC 9293** — Transmission Control Protocol (§3.4, §3.6) |
+| Byte-based sequence numbers, cumulative ACKs | **RFC 9293** — TCP sequence space (§3.3) |
+| Sliding window / pipelining | **RFC 9293** — TCP send/receive window (§3.7) |
+| Retransmission timer (SRTT, RTTVAR, RTO) | **RFC 6298** — Computing TCP's Retransmission Timer |
+| Fast retransmit on 3 duplicate ACKs | **RFC 5681** — TCP Congestion Control (§3.2) |
+| TIME_WAIT state on the active closer | **RFC 9293** — TCP TIME-WAIT (§3.6.1) |
+| Out-of-order receive buffer, gap filling | **RFC 9293** — TCP out-of-order queuing (§3.4) |
+| Connection identifier per session | **RFC 9000** — QUIC (§5.1, connection ID concept); adapted for UDP without TLS |
+| Go-Back-N retransmission policy | KUROSE, J. F. and ROSS, K. W. *Computer Networking: A Top-Down Approach*, ch. 3 |
+
 ## Sources
 
 - RFC 768: User Datagram Protocol
-- RFC 9293: Transmission Control Protocol
+- RFC 5681: TCP Congestion Control
 - RFC 6298: Computing TCP's Retransmission Timer
+- RFC 9000: QUIC — A UDP-Based Multiplexed and Secure Transport
+- RFC 9293: Transmission Control Protocol
 - KUROSE, J. F. and ROSS, K. W. *Computer Networking: A Top-Down Approach*. Pearson.
-- Linux `tc-netem` manual page

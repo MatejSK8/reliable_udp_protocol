@@ -16,6 +16,7 @@ public:
     void run();
 
 private:
+    uint32_t fin_seq = 0;
     std::map<uint32_t, std::vector<char>> window_buffer;
     int sock = -1;
     int timeout_sec = 1;
@@ -37,6 +38,7 @@ private:
         DATA_TRANSFER,
         SEND_FIN_ACK,
         WAIT_CLOSE,
+        LAST_ACK,
         DONE
     };
 
