@@ -1,6 +1,6 @@
 /**
  * @file args.hpp
- * @brief IPK Project 2 - Reliable Data Transfer
+ * @brief CLI argument definitions and Args struct for client/server mode
  * @author xmikusm00
  */
 
@@ -25,8 +25,6 @@ struct Args
     int timeout = 1;          // -w TIMEOUT in seconds
 };
 
-// Parses argc/argv into Args. Prints usage and exits on error.
 Args parse_args(int argc, char *argv[]);
 
-// Prints usage to stdout.
 void print_usage(const char *prog);

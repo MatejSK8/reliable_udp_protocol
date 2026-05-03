@@ -1,3 +1,9 @@
+/**
+ * @file socket_utils.cpp
+ * @brief Implementation of send_pdu — builds and checksums a PDU, sends via sendto
+ * @author xmikusm00
+ */
+
 #include "socket_utils.hpp"
 
 #include <cstring>

@@ -1,3 +1,9 @@
+/**
+ * @file main.cpp
+ * @brief Entry point — signal handling, argument parsing, client/server dispatch
+ * @author xmikusm00
+ */
+
 #include <iostream>
 #include <csignal>
 
