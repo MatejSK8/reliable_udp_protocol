@@ -1,0 +1,28 @@
+name: IPK-RDT Test Suite
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential iproute2 python3
+
+    - name: Compile Project
+      run: make[cite: 1]
+
+    - name: Run Test Suite
+      run: |
+        chmod +x tester.sh
+        ./tester.sh

@@ -1,3 +1,9 @@
+/**
+ * @file socket_utils.hpp
+ * @brief Helper for serialising and sending a PDU over a UDP socket
+ * @author xmikusm00
+ */
+
 #pragma once
 #include <cstdint>
 #include <sys/socket.h>

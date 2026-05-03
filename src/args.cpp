@@ -1,6 +1,6 @@
 /**
  * @file args.cpp
- * @brief IPK Project 1 - L4 Scanner
+ * @brief CLI argument parsing (getopt) and usage output
  * @author xmikusm00
  */
 

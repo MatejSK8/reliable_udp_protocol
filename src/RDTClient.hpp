@@ -1,21 +1,24 @@
+/**
+ * @file RDTClient.hpp
+ * @brief RDTClient — sliding-window sender with 3-way handshake and FIN teardown
+ * @author xmikusm00
+ */
+
 #pragma once
 #include <chrono>
 #include <netdb.h>
 #include <sys/socket.h>
 #include "args.hpp"
 #include "protocol.hpp"
+#include "RDTBase.hpp"
 
-class RFTClient
+class RDTClient : public RDTBase
 {
 public:
-    RFTClient(const Args &args);
-    ~RFTClient();
+    RDTClient(const Args &args);
+    ~RDTClient();
     void run(const Args &args);
 
-private:
-    double srtt = -1;
-    double rttvar = 0;
-    double rto = 0.01;
     uint32_t highest_cumulative_ack = 0;
     int dup_ack_count = 0;
     std::chrono::steady_clock::time_point syn_send_time;
@@ -26,7 +29,6 @@ private:
 
     WindowSlot window[WINDOW_SIZE];
     FILE *input_file;
-    int sock = -1;
     sockaddr_storage dest_addr{};
     socklen_t dest_len = 0;
     enum class State
@@ -41,7 +43,4 @@ private:
         DONE
     };
     State current_state = State::SEND_SYN;
-
-    void set_recv_timeout(double seconds);
-    void update_rtt(double rtt_sample);
 };

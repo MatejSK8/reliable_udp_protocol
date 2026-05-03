@@ -1,3 +1,9 @@
+/**
+ * @file protocol.hpp
+ * @brief PDU header layout, protocol constants, checksum and validation helpers
+ * @author xmikusm00
+ */
+
 #pragma once
 #include <chrono>
 #include <cstdint>
@@ -16,12 +22,12 @@
 #pragma pack(push, 1)
 struct PduHeader
 {
-    uint32_t conn_id{};                 // connection identifier
-    uint32_t seq{};                     // sequence number (byte offset or packet number)
-    uint32_t ack{};                     // cumulative ACK
-    uint16_t length = MAX_PAYLOAD_SIZE; // payload length in bytes
-    uint8_t flags{};                    // SYN/ACK/FIN/DATA
-    uint8_t checksum{};                 // simple XOR or sum over header+payload
+    uint32_t conn_id{};
+    uint32_t seq{};
+    uint32_t ack{};
+    uint16_t length = MAX_PAYLOAD_SIZE;
+    uint8_t flags{};
+    uint8_t checksum{};
 };
 #pragma pack(pop)
 
