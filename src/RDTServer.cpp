@@ -1,22 +1,19 @@
-#include "RFTServer.hpp"
+#include "RDTServer.hpp"
 
-#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 #include <iostream>
 #include <netdb.h>
 #include <unistd.h>
 #include <sys/socket.h>
-#include <map>
 #include <vector>
 
 #include "globals.hpp"
 #include "protocol.hpp"
 #include "socket_utils.hpp"
 
-RFTServer::RFTServer(const Args &args)
+RDTServer::RDTServer(const Args &args)
 {
     output_file = args.output.empty() || args.output == "-" ? stdout : fopen(args.output.c_str(), "wb");
     timeout_sec = args.timeout;
@@ -68,7 +65,7 @@ RFTServer::RFTServer(const Args &args)
     freeaddrinfo(res);
 }
 
-void RFTServer::set_recv_timeout(double seconds)
+void RDTServer::set_recv_timeout(double seconds)
 {
     if (seconds < 0.001)
         seconds = 0.001;
@@ -78,7 +75,7 @@ void RFTServer::set_recv_timeout(double seconds)
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 }
 
-void RFTServer::update_rtt(double sample)
+void RDTServer::update_rtt(double sample)
 {
     if (srtt < 0)
     {
@@ -97,7 +94,7 @@ void RFTServer::update_rtt(double sample)
         rto = 60.0;
 }
 
-void RFTServer::run()
+void RDTServer::run()
 {
     std::cerr << "RFTServer running\n";
 
@@ -298,7 +295,7 @@ void RFTServer::run()
     }
 }
 
-RFTServer::~RFTServer()
+RDTServer::~RDTServer()
 {
     if (sock >= 0)
         close(sock);

@@ -5,11 +5,11 @@
 #include "args.hpp"
 #include "protocol.hpp"
 
-class RFTClient
+class RDTClient
 {
 public:
-    RFTClient(const Args &args);
-    ~RFTClient();
+    RDTClient(const Args &args);
+    ~RDTClient();
     void run(const Args &args);
 
 private:
