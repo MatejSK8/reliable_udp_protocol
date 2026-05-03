@@ -219,7 +219,7 @@ void RFTClient::run(const Args &args)
                     continue;
                 PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
                 if (hdr->conn_id != syn_pdu.conn_id || hdr->flags != FLAG_ACK)
-                    break;
+                    continue;
 
                 uint32_t cum_ack = hdr->ack;
                 std::cerr << "[client] ACK cum=" << cum_ack << "\n";
@@ -236,6 +236,14 @@ void RFTClient::run(const Args &args)
                         window[window_start].send_time = clock::now();
                         window[window_start].retransmitted = true;
                         dup_ack_count = 0;
+                        char drain[MAX_PDU_SIZE];
+                        sockaddr_storage tmp{};
+                        socklen_t tmp_len = sizeof(tmp);
+                        while (recvfrom(sock, drain, sizeof(drain), MSG_DONTWAIT,
+                                        reinterpret_cast<sockaddr *>(&tmp), &tmp_len) > 0)
+                        {
+                        }
+                        break;
                     }
                 }
                 else if (cum_ack > highest_cumulative_ack || highest_cumulative_ack == 0)
