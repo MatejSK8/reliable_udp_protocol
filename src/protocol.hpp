@@ -44,3 +44,17 @@ inline uint8_t compute_checksum(const void *data, size_t len)
         sum ^= bytes[i];
     return sum;
 }
+
+inline bool validate_pdu(const char *buf, ssize_t n)
+{
+    if (n < (ssize_t)sizeof(PduHeader))
+        return false;
+    PduHeader *hdr = reinterpret_cast<PduHeader *>(const_cast<char *>(buf));
+    if (hdr->length > MAX_PAYLOAD_SIZE || (ssize_t)(sizeof(PduHeader) + hdr->length) > n)
+        return false;
+    uint8_t rc = hdr->checksum;
+    hdr->checksum = 0;
+    bool ok = (compute_checksum(buf, sizeof(PduHeader) + hdr->length) == rc);
+    hdr->checksum = rc;
+    return ok;
+}

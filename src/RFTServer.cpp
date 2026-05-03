@@ -9,6 +9,8 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <map>
+#include <vector>
 
 #include "globals.hpp"
 #include "protocol.hpp"
@@ -29,12 +31,12 @@ RFTServer::RFTServer(const Args &args)
     int rc = getaddrinfo(addr, port_str.c_str(), &hints, &res);
     if (rc != 0)
     {
-        // std::cerr << "getaddrinfo: " << gai_strerror(rc) << "\n";
+        std::cerr << "getaddrinfo: " << gai_strerror(rc) << "\n";
         return;
     }
     if (res == nullptr)
     {
-        // std::cerr << "getaddrinfo: no results\n";
+        std::cerr << "getaddrinfo: no results\n";
         return;
     }
 
@@ -89,8 +91,8 @@ void RFTServer::update_rtt(double sample)
         srtt = 0.875 * srtt + 0.125 * sample;
     }
     rto = srtt + 4.0 * rttvar;
-    if (rto < 0.1)
-        rto = 0.1;
+    if (rto < 0.01)
+        rto = 0.01;
     if (rto > 60.0)
         rto = 60.0;
 }
@@ -126,14 +128,17 @@ void RFTServer::run()
                                  reinterpret_cast<sockaddr *>(&client_addr), &sender_len);
             if (n < 0)
                 break;
-            PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
-            if (hdr->flags == FLAG_SYN)
+            if (!validate_pdu(buf, n))
+                break;
             {
-                conn_id = hdr->conn_id;
-                expected_seq = hdr->seq;
-                // std::cerr << "[server] SYN received, ISN=" << expected_seq << "\n";
-                current_state = State::SEND_SYNACK;
-                last_progress = clock::now();
+                PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
+                if (hdr->flags == FLAG_SYN)
+                {
+                    conn_id = hdr->conn_id;
+                    expected_seq = hdr->seq;
+                    current_state = State::SEND_SYNACK;
+                    last_progress = clock::now();
+                }
             }
             break;
         }
@@ -141,7 +146,6 @@ void RFTServer::run()
         {
             synack_send_time = clock::now();
             send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_SYN | FLAG_ACK, 0, expected_seq + 1, nullptr, 0);
-            // std::cerr << "[server] SYN-ACK sent, RTO=" << rto << "s\n";
             set_recv_timeout(rto);
             current_state = State::WAIT_ACK;
             break;
@@ -156,6 +160,9 @@ void RFTServer::run()
                 current_state = State::SEND_SYNACK;
                 break;
             }
+            if (!validate_pdu(buf, n))
+                break;
+            {
             PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
             if (hdr->conn_id == conn_id && (hdr->flags == FLAG_ACK || hdr->flags == FLAG_DATA))
             {
@@ -167,14 +174,12 @@ void RFTServer::run()
             }
             else if (hdr->conn_id == conn_id && hdr->flags == FLAG_SYN)
             {
-                // SYN-ACK was lost; client is retransmitting SYN — resend SYN-ACK
                 current_state = State::SEND_SYNACK;
             }
             else if (hdr->conn_id == conn_id && hdr->flags == FLAG_FIN)
             {
-                // SYN-ACK or ACK was lost; client is giving up and starting teardown
-                // std::cerr << "[server] FIN received during handshake, moving to teardown\n";
                 current_state = State::SEND_FIN_ACK;
+            }
             }
             break;
         }
@@ -186,41 +191,43 @@ void RFTServer::run()
             if (n < 0)
                 break;
 
+            if (!validate_pdu(buf, n))
+                break;
             PduHeader *pdu = reinterpret_cast<PduHeader *>(buf);
             if (pdu->conn_id != conn_id)
-            {
-                // std::cerr << "[server] received packet for unknown conn_id=" << pdu->conn_id << "\n";
                 break;
-            }
-
-            uint8_t received_cksum = pdu->checksum;
-            pdu->checksum = 0;
-            uint8_t expected_cksum = compute_checksum(buf, sizeof(PduHeader) + pdu->length);
-            pdu->checksum = received_cksum;
-            if (received_cksum != expected_cksum)
-            {
-                // std::cerr << "[server] checksum mismatch, expected=" << static_cast<int>(expected_cksum) << " got=" << static_cast<int>(received_cksum) << "\n";
-                break;
-            }
 
             if (pdu->flags == FLAG_DATA)
             {
-                // std::cerr << "[server] DATA received, seq=" << pdu->seq << " expected_seq=" << expected_seq << "\n";
                 if (pdu->seq == expected_seq)
                 {
                     fwrite(buf + sizeof(PduHeader), 1, pdu->length, output_file);
                     expected_seq += pdu->length;
                     last_progress = clock::now();
+                    while (window_buffer.count(expected_seq) > 0)
+                    {
+                        std::vector<char> &data = window_buffer[expected_seq];
+                        uint32_t size = data.size();
+                        fwrite(data.data(), 1, size, output_file);
+                        last_progress = clock::now();
+                        window_buffer.erase(expected_seq);
+                        expected_seq += size;
+                    }
                 }
                 else
                 {
-                    // std::cerr << "[server] out-of-order, expected=" << expected_seq << " got=" << pdu->seq << "\n";
+                    if (pdu->seq > expected_seq &&
+                        window_buffer.count(pdu->seq) == 0 &&
+                        pdu->seq < expected_seq + WINDOW_SIZE * MAX_PAYLOAD_SIZE)
+                    {
+                        window_buffer[pdu->seq] = std::vector<char>(buf + sizeof(PduHeader), buf + sizeof(PduHeader) + pdu->length);
+                    }
                 }
                 send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_ACK, 0, expected_seq, nullptr, 0);
             }
             else if (pdu->flags == FLAG_FIN)
             {
-                // D std::cerr << "[server] FIN received\n";
+                std::cerr << "[server] FIN received\n";
                 current_state = State::SEND_FIN_ACK;
             }
             break;
@@ -228,7 +235,7 @@ void RFTServer::run()
         case State::SEND_FIN_ACK:
         {
             send_pdu(sock, reinterpret_cast<sockaddr *>(&client_addr), sender_len, conn_id, FLAG_FIN | FLAG_ACK, 0, expected_seq, nullptr, 0);
-            // std::cerr << "[server] FIN-ACK sent, RTO=" << rto << "s\n";
+            std::cerr << "[server] FIN-ACK sent, RTO=" << rto << "s\n";
             set_recv_timeout(rto);
             close_deadline = clock::now() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(rto) * 4);
             if (std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(rto) * 4) >= std::chrono::seconds(timeout_sec))
@@ -243,7 +250,7 @@ void RFTServer::run()
             if (clock::now() >= close_deadline)
             {
                 current_state = State::DONE;
-                // std::cerr << "[server] close timeout, moving to DONE\n";
+                std::cerr << "[server] close timeout, moving to DONE\n";
                 break;
             }
             sender_len = sizeof(client_addr);
@@ -255,7 +262,7 @@ void RFTServer::run()
             if (pdu->conn_id == conn_id && pdu->flags == FLAG_FIN)
             {
                 current_state = State::SEND_FIN_ACK;
-                // std::cerr << "[server] FIN retransmission received, resending FIN-ACK\n";
+                std::cerr << "[server] FIN retransmission received, resending FIN-ACK\n";
             }
             break;
         }

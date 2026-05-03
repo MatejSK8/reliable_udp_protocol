@@ -37,8 +37,8 @@ void RFTClient::update_rtt(double sample)
         srtt = 0.875 * srtt + 0.125 * sample;
     }
     rto = srtt + 4.0 * rttvar;
-    if (rto < 0.1)
-        rto = 0.1;
+    if (rto < 0.01)
+        rto = 0.01;
     if (rto > 60.0)
         rto = 60.0;
 }
@@ -113,25 +113,21 @@ void RFTClient::run(const Args &args)
             {
                 if (g_stop)
                     break;
-                // std::cerr << "[client] timeout, resending SYN\n";
+                std::cerr << "[client] timeout, resending SYN\n";
                 syn_send_time = clock::now();
                 send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_SYN, syn_pdu.seq, 0, nullptr, 0);
                 break;
             }
             {
-                PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
-                uint8_t rc = hdr->checksum;
-                hdr->checksum = 0;
-                bool ok = (compute_checksum(buf, n) == rc);
-                hdr->checksum = rc;
-                if (!ok)
+                if (!validate_pdu(buf, n))
                     break;
+                PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
                 if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == (FLAG_SYN | FLAG_ACK))
                 {
                     double rtt = std::chrono::duration<double>(clock::now() - syn_send_time).count();
                     update_rtt(rtt);
                     set_recv_timeout(rto);
-                    // std::cerr << "[client] SYN-ACK received, RTT=" << rtt << "s RTO=" << rto << "s\n";
+                    std::cerr << "[client] SYN-ACK received, RTT=" << rtt << "s RTO=" << rto << "s\n";
                     send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len, syn_pdu.conn_id, FLAG_ACK, 0, hdr->seq + 1, nullptr, 0);
                     last_progress = clock::now();
                     current_state = State::DATA_TRANSFER;
@@ -156,7 +152,7 @@ void RFTClient::run(const Args &args)
                              window[idx].data, window[idx].len);
                     window[idx].send_time = now;
                     window[idx].retransmitted = true;
-                    // std::cerr << "[client] retransmit seq=" << window[idx].seq << "\n";
+                    std::cerr << "[client] retransmit seq=" << window[idx].seq << "\n";
                 }
             }
 
@@ -188,7 +184,7 @@ void RFTClient::run(const Args &args)
                          syn_pdu.conn_id, FLAG_DATA, window[free_slot].seq, 0,
                          window[free_slot].data, bytes);
                 next_seq += bytes;
-                // std::cerr << "[client] sent seq=" << window[free_slot].seq << " len=" << bytes << "\n";
+                std::cerr << "[client] sent seq=" << window[free_slot].seq << " len=" << bytes << "\n";
             }
 
             bool any_in_use = false;
@@ -219,36 +215,20 @@ void RFTClient::run(const Args &args)
 
                 if (n < 0)
                     break;
-                if (n < (ssize_t)sizeof(PduHeader))
+                if (!validate_pdu(buf, n))
                     continue;
-
                 PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
-                uint8_t rc = hdr->checksum;
-                hdr->checksum = 0;
-
-                if (n < (ssize_t)sizeof(PduHeader) ||
-                    hdr->length > MAX_PAYLOAD_SIZE ||
-                    (sizeof(PduHeader) + hdr->length) > (size_t)n)
-                {
-                    continue;
-                }
-
-                bool ck_ok = (compute_checksum(buf, sizeof(PduHeader) + hdr->length) == rc);
-                hdr->checksum = rc;
-                if (!ck_ok)
-                    continue;
-
                 if (hdr->conn_id != syn_pdu.conn_id || hdr->flags != FLAG_ACK)
                     break;
 
                 uint32_t cum_ack = hdr->ack;
-                // std::cerr << "[client] ACK cum=" << cum_ack << "\n";
+                std::cerr << "[client] ACK cum=" << cum_ack << "\n";
                 if (cum_ack == highest_cumulative_ack)
                 {
                     dup_ack_count++;
                     if (dup_ack_count == 3)
                     {
-                        // std::cerr << "[client] 3 duplicate ACKs, fast retransmit seq=" << cum_ack << "\n";
+                        std::cerr << "[client] 3 duplicate ACKs, fast retransmit seq=" << cum_ack << "\n";
 
                         send_pdu(sock, reinterpret_cast<sockaddr *>(&dest_addr), dest_len,
                                  syn_pdu.conn_id, FLAG_DATA, window[window_start].seq, 0,
@@ -278,21 +258,6 @@ void RFTClient::run(const Args &args)
                             rto = 2.0;
                     }
                 }
-                // while (window[window_start].in_use &&
-                //        (window[window_start].seq + static_cast<uint32_t>(window[window_start].len)) <= cum_ack)
-                // {
-                //     if (!window[window_start].retransmitted)
-                //     {
-                //         double rtt = std::chrono::duration<double>(clock::now() - window[window_start].send_time).count();
-                //         update_rtt(rtt);
-                //     }
-                //     window[window_start].in_use = false;
-                //     window_start = (window_start + 1) % WINDOW_SIZE;
-                //     last_progress = clock::now();
-
-                //     if (rto > 2.0)
-                //         rto = 2.0;
-                // }
             }
             break;
         }
@@ -314,26 +279,17 @@ void RFTClient::run(const Args &args)
             {
                 if (g_stop)
                     break;
-                // std::cerr << "[client] timeout, resending FIN\n";
+                std::cerr << "[client] timeout, resending FIN\n";
                 current_state = State::SEND_FIN;
                 break;
             }
             {
+                if (!validate_pdu(buf, n))
+                    break;
                 PduHeader *hdr = reinterpret_cast<PduHeader *>(buf);
-
-                if (hdr->length > MAX_PAYLOAD_SIZE || sizeof(PduHeader) + hdr->length > static_cast<size_t>(n))
-                {
-                    break;
-                }
-                uint8_t rc = hdr->checksum;
-                hdr->checksum = 0;
-                bool ck_ok = (compute_checksum(buf, n) == rc);
-                hdr->checksum = rc;
-                if (!ck_ok)
-                    break;
                 if (hdr->conn_id == syn_pdu.conn_id && hdr->flags == (FLAG_FIN | FLAG_ACK))
                 {
-                    // std::cerr << "[client] FIN-ACK received\n";
+                    std::cerr << "[client] FIN-ACK received\n";
                     last_progress = clock::now();
                     current_state = State::DONE;
                 }
