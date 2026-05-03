@@ -35,7 +35,9 @@ private:
         WAIT_SYNACK,
         DATA_TRANSFER,
         SEND_FIN,
-        WAIT_FIN_ACK,
+        FIN_WAIT_1,
+        FIN_WAIT_2,
+        TIME_WAIT,
         DONE
     };
     State current_state = State::SEND_SYN;
