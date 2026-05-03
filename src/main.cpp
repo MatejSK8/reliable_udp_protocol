@@ -2,8 +2,8 @@
 #include <csignal>
 
 #include "args.hpp"
-#include "RFTClient.hpp"
-#include "RFTServer.hpp"
+#include "RDTClient.hpp"
+#include "RDTServer.hpp"
 
 volatile sig_atomic_t g_stop = 0;
 volatile sig_atomic_t g_interrupted = 0;
@@ -28,12 +28,12 @@ int main(const int argc, char *argv[]) {
             << "timeout: " << args.timeout << "\n";
     switch (args.mode) {
         case Mode::CLIENT: {
-            RFTClient client(args);
+            RDTClient client(args);
             client.run(args);
             break;
         }
         case Mode::SERVER: {
-            RFTServer server(args);
+            RDTServer server(args);
             server.run();
             break;
         }

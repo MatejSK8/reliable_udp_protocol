@@ -8,11 +8,11 @@
 #include "args.hpp"
 #include "protocol.hpp"
 
-class RFTServer
+class RDTServer
 {
 public:
-    RFTServer(const Args &args);
-    ~RFTServer();
+    RDTServer(const Args &args);
+    ~RDTServer();
     void run();
 
 private:

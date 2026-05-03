@@ -1,4 +1,4 @@
-#include "RFTClient.hpp"
+#include "RDTClient.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -14,7 +14,7 @@
 #include "protocol.hpp"
 #include "socket_utils.hpp"
 
-void RFTClient::set_recv_timeout(double seconds)
+void RDTClient::set_recv_timeout(double seconds)
 {
     if (seconds < 0.001)
         seconds = 0.001;
@@ -24,7 +24,7 @@ void RFTClient::set_recv_timeout(double seconds)
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 }
 
-void RFTClient::update_rtt(double sample)
+void RDTClient::update_rtt(double sample)
 {
     if (srtt < 0)
     {
@@ -43,7 +43,7 @@ void RFTClient::update_rtt(double sample)
         rto = 60.0;
 }
 
-RFTClient::RFTClient(const Args &args)
+RDTClient::RDTClient(const Args &args)
 {
     input_file = args.input.empty() || args.input == "-" ? stdin : fopen(args.input.c_str(), "rb");
 
@@ -78,7 +78,7 @@ RFTClient::RFTClient(const Args &args)
     freeaddrinfo(res);
 }
 
-void RFTClient::run(const Args &args)
+void RDTClient::run(const Args &args)
 {
     char buf[MAX_PDU_SIZE]{};
     sockaddr_storage sender{};
@@ -368,7 +368,7 @@ void RFTClient::run(const Args &args)
     }
 }
 
-RFTClient::~RFTClient()
+RDTClient::~RDTClient()
 {
     if (sock >= 0)
         close(sock);
