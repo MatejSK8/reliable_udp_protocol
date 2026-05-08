@@ -1,7 +1,6 @@
 # IPK Project 2 — Reliable File Transfer over UDP
 
 **Author:** Matej Mikuš  
-**Login:** xmikusm00  
 **Date:** 2026-05-03
 
 ---
