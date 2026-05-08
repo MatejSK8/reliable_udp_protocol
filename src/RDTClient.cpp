@@ -24,6 +24,7 @@ RDTClient::RDTClient(const Args &args)
 {
     input_file = args.input.empty() || args.input == "-" ? stdin : fopen(args.input.c_str(), "rb");
 
+    srand(time(0));
     next_seq = static_cast<uint32_t>(rand());
 
     for (int i = 0; i < WINDOW_SIZE; i++)
