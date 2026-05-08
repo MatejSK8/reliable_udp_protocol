@@ -219,41 +219,71 @@ sequenceDiagram
 ### Client State Machine
 
 ```mermaid
-stateDiagram-v2
-    [*] --> SEND_SYN
-    SEND_SYN --> WAIT_SYNACK : SYN sent
-    WAIT_SYNACK --> WAIT_SYNACK : timeout / retransmit SYN
-    WAIT_SYNACK --> DATA_TRANSFER : SYN|ACK rx, send ACK
-    DATA_TRANSFER --> DATA_TRANSFER : send data / receive ACK
-    DATA_TRANSFER --> SEND_FIN : EOF + all ACKed
-    SEND_FIN --> FIN_WAIT_1 : FIN sent
-    FIN_WAIT_1 --> SEND_FIN : timeout / retransmit FIN
-    FIN_WAIT_1 --> FIN_WAIT_2 : ACK rx
-    FIN_WAIT_1 --> TIME_WAIT : FIN rx (simultaneous close), send ACK
-    FIN_WAIT_2 --> TIME_WAIT : FIN rx, send ACK
-    TIME_WAIT --> TIME_WAIT : FIN rx (retransmit), resend ACK
-    TIME_WAIT --> DONE : 2×RTO elapsed
-    DONE --> [*]
+flowchart LR
+    START([start])
+
+    subgraph Handshake
+        SEND_SYN[SEND_SYN]
+        WAIT_SYNACK[WAIT_SYNACK]
+    end
+
+    subgraph Transfer
+        DATA_TRANSFER[DATA_TRANSFER]
+    end
+
+    subgraph Teardown
+        SEND_FIN[SEND_FIN]
+        FIN_WAIT_1[FIN_WAIT_1]
+        FIN_WAIT_2[FIN_WAIT_2]
+        TIME_WAIT[TIME_WAIT]
+    end
+
+    DONE([done])
+
+    START --> SEND_SYN
+    SEND_SYN -->|SYN sent| WAIT_SYNACK
+    WAIT_SYNACK -->|timeout| SEND_SYN
+    WAIT_SYNACK -->|SYN-ACK rx| DATA_TRANSFER
+    DATA_TRANSFER -->|EOF and all ACKed| SEND_FIN
+    SEND_FIN -->|FIN sent| FIN_WAIT_1
+    FIN_WAIT_1 -->|timeout| SEND_FIN
+    FIN_WAIT_1 -->|ACK rx| FIN_WAIT_2
+    FIN_WAIT_1 -->|FIN rx| TIME_WAIT
+    FIN_WAIT_2 -->|FIN rx| TIME_WAIT
+    TIME_WAIT -->|2xRTO elapsed| DONE
 ```
 
 ### Server State Machine
 
 ```mermaid
-stateDiagram-v2
-    [*] --> WAIT_SYN
-    WAIT_SYN --> SEND_SYNACK : SYN rx
-    SEND_SYNACK --> WAIT_ACK : SYN|ACK sent
-    WAIT_ACK --> SEND_SYNACK : timeout / retransmit SYN|ACK
-    WAIT_ACK --> SEND_SYNACK : SYN rx (client retransmit)
-    WAIT_ACK --> DATA_TRANSFER : ACK or DATA rx
-    WAIT_ACK --> LAST_ACK : FIN rx (client gave up early), send ACK+FIN
-    DATA_TRANSFER --> DATA_TRANSFER : DATA rx / send ACK
-    DATA_TRANSFER --> LAST_ACK : FIN rx, send ACK+FIN
-    LAST_ACK --> LAST_ACK : timeout / retransmit FIN
-    LAST_ACK --> LAST_ACK : FIN rx (retransmit), resend ACK+FIN
-    LAST_ACK --> DONE : ACK rx
-    LAST_ACK --> DONE : -w timeout elapsed
-    DONE --> [*]
+flowchart LR
+    START([start])
+
+    subgraph Handshake
+        WAIT_SYN[WAIT_SYN]
+        SEND_SYNACK[SEND_SYNACK]
+        WAIT_ACK[WAIT_ACK]
+    end
+
+    subgraph Transfer
+        DATA_TRANSFER[DATA_TRANSFER]
+    end
+
+    subgraph Teardown
+        LAST_ACK[LAST_ACK]
+    end
+
+    DONE([done])
+
+    START --> WAIT_SYN
+    WAIT_SYN -->|SYN rx| SEND_SYNACK
+    SEND_SYNACK -->|SYN-ACK sent| WAIT_ACK
+    WAIT_ACK -->|timeout or SYN rx| SEND_SYNACK
+    WAIT_ACK -->|ACK or DATA rx| DATA_TRANSFER
+    WAIT_ACK -->|FIN rx| LAST_ACK
+    DATA_TRANSFER -->|FIN rx| LAST_ACK
+    LAST_ACK -->|ACK rx| DONE
+    LAST_ACK -->|timeout| DONE
 ```
 
 ---
@@ -285,9 +315,63 @@ sudo tc qdisc del dev lo root
 - **Fixed window size:** the window is always 64 segments regardless of network conditions; no congestion control is implemented.
 - **XOR checksum:** weaker than CRC-32 or ones-complement sum — cannot detect all even-count bit flip patterns or byte swaps.
 - **Sequence number wrap-around:** 32-bit byte-offset sequence numbers wrap at ~4 GB; transfers larger than 4 GB are not supported.
-- **Single transfer per server invocation:** the server exits after one complete transfer or failure.
-- **IPv6 dual-stack:** the implementation iterates `getaddrinfo` results and uses the first address family that succeeds; explicit dual-stack is not configured.
 - **No transfer resume:** a process crash requires restarting both sides.
+
+---
+
+## Testing
+
+Tests are located in `tester/tester.sh` and can be run with:
+
+```sh
+make test
+```
+
+The script requires `sudo` for `tc netem` impairment tests. It automatically cleans up network rules and temporary files on exit.
+
+Clean-network tests use `-w 3`, impairment tests use `-w 10` to give the protocol enough room to recover without hitting the progress timeout. The server port is checked with `ss` before the client starts to avoid race conditions.
+
+### Test cases
+
+| # | Name | Input size | `-w` | Impairment | What it verifies |
+|---|------|-----------|------|------------|-----------------|
+| 1 | Empty file | 0 bytes | 3 | None | Handshake + immediate FIN with no data |
+| 2 | Single byte | 1 byte | 3 | None | Minimum non-empty transfer |
+| 3 | Exact max payload | 1184 bytes | 3 | None | Single segment boundary (MAX_PAYLOAD_SIZE) |
+| 4 | Exact full window | 75 776 bytes | 3 | None | Exactly 64 segments in flight |
+| 5 | 5% packet loss | 1 MB | 10 | `loss 5%` | Retransmission on loss |
+| 6 | 20 ms delay | 1 MB | 10 | `delay 20ms` | RTO adapts to higher latency |
+| 7 | 15% reorder + 10 ms | 1 MB | 10 | `delay 10ms reorder 15%` | Out-of-order receive buffer and gap filling |
+| 8 | 10% loss + 30 ms + 20% reorder | 1 MB | 10 | `loss 10% delay 30ms reorder 20%` | Combined adverse conditions |
+| 9 | 10 MB stress | 10 MB | 3 | None | Sustained pipelining throughput |
+| 10 | Fast retransmit | 1 MB | 10 | `loss 10%` | 3 duplicate ACK fast retransmit path |
+| 11 | High latency | 1 MB | 10 | `delay 100ms` | Correct timeout scaling at high RTT |
+| 12 | 20 MB large transfer | 20 MB | 3 | None | Large file integrity |
+| CLI-1 | `-h` flag | — | — | — | Exit code 0 on help |
+| CLI-2 | Missing mode | — | — | — | Exit code 1, error to stderr |
+| CLI-3 | Missing port | — | — | — | Exit code 1, error to stderr |
+| CLI-4 | Invalid port 99999 | — | — | — | Exit code 1, port validation |
+| CLI-5 | Non-existent input file | — | — | — | Exit code 1, file open error |
+| CLI-6 | Invalid timeout `-w -5` | — | — | — | Exit code 1, timeout validation |
+
+All transfer tests verify output byte-for-byte with `cmp`.
+
+---
+
+## AI Usage
+
+
+  AI assistance (Claude Sonnet 4.6), (Gemini 3.1 PRO) was used in this project for the following purposes:
+
+  - Clarifying the assignment — explaining parts of the specification and relevant standards (RFC 9293, RFC 6298, RFC 5681) that were not
+  immediately clear.
+  - Code comments — generating file headers and inline RFC-reference comments.
+  - Test script — generating the tester/tester.sh test suite structure and individual test cases.
+  - Documentation — generating and proofreading README.md sections.
+
+  The protocol design, state machine logic, and implementation were developed by the author. The primary inspiration for the protocol design
+  was KUROSE, J. F. and ROSS, K. W. Computer Networking: A Top-Down Approach. Pearson. Ideas were communicated to the AI in pseudocode and
+  natural language and then implemented independently.
 
 ---
 

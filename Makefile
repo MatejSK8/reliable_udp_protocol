@@ -1,3 +1,4 @@
+LANGUAGE = c++
 CXX = g++
 CXXFLAGS = -std=c++11 -Wall -Wextra
 
@@ -9,7 +10,13 @@ ipk-rdt: src/main.o src/args.o src/RDTClient.o src/RDTServer.o src/socket_utils.
 src/%.o: src/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+test: ipk-rdt
+	bash tester/tester.sh
+
 clean:
 	rm -f ipk-rdt src/*.o
 
-.PHONY: all clean
+NixDevShellName:
+	@echo c
+
+.PHONY: all test clean NixDevShellName
