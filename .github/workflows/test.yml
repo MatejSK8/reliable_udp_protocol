@@ -20,9 +20,9 @@ jobs:
         sudo apt-get install -y build-essential iproute2 python3
 
     - name: Compile Project
-      run: make[cite: 1]
+      run: make
 
     - name: Run Test Suite
       run: |
-        chmod +x tester.sh
-        ./tester.sh
+        chmod +x tester/tester.sh
+        ./tester/tester.sh
